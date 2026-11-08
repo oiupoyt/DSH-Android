@@ -268,6 +268,9 @@ jobs:
           echo "APK=$OUT" >> "$GITHUB_ENV"
           ls -l "$OUT"
 
+      # A debug-signed APK still proves the build works, so an artifacts-only run is allowed
+      # to produce one. Publishing it is not: the publisher re-checks and refuses. The flag is
+      # passed through a file because the artifact upload and the release job are separate.
       - name: Verify the APK signature
         run: |
           set -euo pipefail
@@ -275,9 +278,12 @@ jobs:
           "$BT/apksigner" verify --print-certs "$APK" | tee /tmp/certs.txt
           grep -q "certificate SHA-256 digest" /tmp/certs.txt || { echo "::error::APK has no signer"; exit 1; }
           if grep -q "CN=Android Debug" /tmp/certs.txt; then
-            echo "::error::APK is debug-signed; the updater would reject it"
-            exit 1
+            echo "debug-signed" > signing.txt
+            echo "::warning::APK is debug-signed: artifacts are fine to inspect, but this build must not be published."
+          else
+            echo "release-signed" > signing.txt
           fi
+          cat signing.txt
 
       - name: Write release notes
         run: |
@@ -326,6 +332,7 @@ jobs:
             ${{ env.APK }}
             update.json
             notes-zh.md
+            signing.txt
           retention-days: 14
 
   release:
@@ -353,6 +360,10 @@ jobs:
           APK="DSH-Android-v${VERSION}-arm64.apk"
           test -s "$APK" || { echo "::error::$APK missing"; exit 1; }
           test -s update.json || { echo "::error::update.json missing"; exit 1; }
+          if [ -f signing.txt ] && grep -q debug-signed signing.txt; then
+            echo "::error::refusing to publish a debug-signed APK (the updater deletes mismatched downloads)"
+            exit 1
+          fi
           ARGS=()
           [ "$DRAFT" = "true" ] && ARGS+=(--draft)
           if gh release view "$TAG" >/dev/null 2>&1; then
