@@ -138,16 +138,26 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # The runner image already ships a complete SDK (platform-tools, cmdline-tools, several
+      # build-tools). android-actions/setup-android@v3 is deliberately NOT used: it runs
+      # `sdkmanager tools`, a package that no longer exists, and the action fails before any
+      # of our steps run. Installing only what we need is both faster and stable.
       - name: Install SDK components
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platforms;android-${{ env.ANDROID_COMPILE_SDK }}" \
-                     "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" \
-                     "platform-tools"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          SM="$(ls -d "$SDK"/cmdline-tools/*/bin 2>/dev/null | sort -V | tail -1)"
+          [ -n "$SM" ] || { echo "::error::no cmdline-tools in $SDK"; ls -la "$SDK"; exit 1; }
+          echo "$SM" >> "$GITHUB_PATH"
+          yes | "$SM/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$SM/sdkmanager" --install \
+            "platforms;android-${{ env.ANDROID_COMPILE_SDK }}" \
+            "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" \
+            "platform-tools"
+          ls -d "$SDK"/build-tools/* | sort -V | tail -1
+          ls -d "$SDK"/platforms/* | sort -V | tail -1
 
       # ---- native libs -----------------------------------------------------
       - name: Fetch native libs (prebuilt, keyed by native inputs)
