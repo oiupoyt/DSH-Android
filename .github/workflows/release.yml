@@ -245,6 +245,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          mkdir -p ~/.gradle
           install -m 600 /dev/null ~/.gradle/gradle.properties
           {
             echo "dsh.signing.storeFile=$RUNNER_TEMP/release.jks"
