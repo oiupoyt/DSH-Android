@@ -1,0 +1,385 @@
+name: release
+
+# Builds the signed release APK and publishes it as a GitHub Release with the in-app updater's
+# `update.json`. docs/RELEASE.md is the manual equivalent; this automates steps 2-8.
+#
+# Triggers, deliberately narrow:
+#   * push a tag `vX.Y.Z`  -> build and PUBLISH a Release (only if X.Y.Z matches versionName)
+#   * workflow_dispatch    -> build and keep the artifacts; publishes only when draft=false
+# Nothing runs on a branch push or on pull requests.
+#
+# Two inputs are not in this repository and are fetched from public locations (both verified
+# reachable without authentication, and both are artifacts this project publishes itself):
+#   * native libs — native/prebuilt.sh fetch, a release keyed by a hash of native/build.sh +
+#                   patches + JNI sources. If that tag is missing (native inputs changed) the
+#                   job falls back to a full native/build.sh source build.
+#   * engine.zip  — rebuilt from js/ (npm ci against the committed lockfile, then the committed
+#                   patches). Cached by an inputs hash so repeated releases are cheap.
+#
+# Signing requires four repository secrets. Without them the build still runs and the
+# artifacts are uploaded, but the Release is SKIPPED: a debug- or freshly-keyed APK is not
+# installable over the shipped app (the updater compares the certificate and deletes a
+# mismatch), so publishing one would be worse than publishing nothing.
+#   KEYSTORE_BASE64    base64 of the release .jks
+#   KEYSTORE_PASSWORD  store password
+#   KEY_ALIAS          key alias
+#   KEY_PASSWORD       key password
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Publish a Release from this manual run (draft unless you uncheck)"
+        type: boolean
+        default: true
+      publish:
+        description: "Actually publish (otherwise only upload artifacts)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  # The engine and the embedded runtime are pinned to the same Node major (native/build.sh).
+  NODE_VERSION: "24.22.1"
+  ANDROID_COMPILE_SDK: "37.2"
+  ANDROID_BUILD_TOOLS: "37.0.0"
+  GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
+
+jobs:
+  # Fails fast and cheap, before any build cost is spent, when a tag disagrees with the
+  # manifest — the updater compares versionCode, so a mislabelled Release pushes the wrong
+  # version forever after.
+  gate:
+    name: gate (version / tag / signing availability)
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      code: ${{ steps.v.outputs.code }}
+      tag: ${{ steps.v.outputs.tag }}
+      publish: ${{ steps.v.outputs.publish }}
+      signed: ${{ steps.v.outputs.signed }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^ *versionName = "\(.*\)"$/\1/p' app/build.gradle.kts | head -1)"
+          CODE="$(sed -n 's/^ *versionCode = \(.*\)$/\1/p' app/build.gradle.kts | head -1)"
+          [ -n "$VERSION" ] && [ -n "$CODE" ] || { echo "::error::cannot read version from app/build.gradle.kts"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "app version $VERSION ($CODE)"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match versionName v$VERSION (bump app/build.gradle.kts or retag)"
+              exit 1
+            fi
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            WANT_PUBLISH=true
+          else
+            echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+            if [ "${INPUT_PUBLISH:-false}" = "true" ]; then WANT_PUBLISH=true; else WANT_PUBLISH=false; fi
+          fi
+
+          if [ "${HAS_KEYSTORE:-false}" != "true" ]; then
+            echo "::warning::KEYSTORE_BASE64 is not set. Building only; the Release will be skipped because a debug-signed APK cannot update the shipped app."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "publish=$WANT_PUBLISH" >> "$GITHUB_OUTPUT"
+          fi
+          echo "publish=$WANT_PUBLISH (requested), signed=${HAS_KEYSTORE}"
+
+  build:
+    name: build engine + signed APK
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The engine tree, the Gradle cache and a ~175 MB APK do not fit in the runner's
+      # default free space once the SDK is installed.
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" /usr/local/lib/android/sdk/ndk 2>/dev/null || true
+          df -h /
+          avail="$(df --output=avail -BG / | tail -1 | tr -dc '0-9')"
+          if [ "${avail:-0}" -lt 20 ]; then
+            echo "::error::only ${avail}G free; the release build needs ~20G"
+            exit 1
+          fi
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK components
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-${{ env.ANDROID_COMPILE_SDK }}" \
+                     "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" \
+                     "platform-tools"
+
+      # ---- native libs -----------------------------------------------------
+      - name: Fetch native libs (prebuilt, keyed by native inputs)
+        id: native
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p toolchains/out
+          WORK="$PWD/toolchains" OUT="$PWD/toolchains/out/arm64-v8a" JNI_DIR="$PWD/toolchains/out/jniLibs" \
+            bash native/prebuilt.sh fetch || { echo "::warning::no prebuilt for the current native inputs; falling back to a source build"; exit 1; }
+          for f in libnode.so libdshengine.so libdshnode.so; do
+            test -s "toolchains/out/jniLibs/arm64-v8a/$f" || { echo "::error::missing $f"; exit 1; }
+          done
+          ls -l toolchains/out/jniLibs/arm64-v8a
+
+      # Fallback only: a full Node cross-compile for arm64. Slow, and only reached when the
+      # native inputs changed without publishing a matching prebuilt release.
+      - name: Build native libs from source (fallback)
+        if: steps.native.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          sdkmanager "ndk;29.0.14206865"
+          export NDK="$ANDROID_HOME/ndk/29.0.14206865"
+          WORK="$PWD/toolchains" OUT="$PWD/toolchains/out/arm64-v8a" JNI_DIR="$PWD/toolchains/out/jniLibs" \
+            bash native/build.sh
+          for f in libnode.so libdshengine.so libdshnode.so; do
+            test -s "toolchains/out/jniLibs/arm64-v8a/$f" || { echo "::error::missing $f after source build"; exit 1; }
+          done
+
+      # ---- engine ----------------------------------------------------------
+      - name: Compute engine inputs hash
+        id: engine-key
+        run: |
+          set -euo pipefail
+          H="$(find js/engine/package.json js/engine/package-lock.json js/patches js/packages js/scripts -type f -print0 \
+               | LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum | cut -c1-16)"
+          echo "hash=$H" >> "$GITHUB_OUTPUT"
+          echo "engine inputs: $H"
+
+      - name: Restore engine.zip
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: toolchains/out/engine
+          key: engine-${{ steps.engine-key.outputs.hash }}-node${{ env.NODE_VERSION }}
+
+      - name: Build engine
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          bash js/build-engine.sh
+          ls -l toolchains/out/engine
+
+      - name: Verify engine output
+        run: |
+          set -euo pipefail
+          test -s toolchains/out/engine/engine.zip || { echo "::error::engine.zip missing"; exit 1; }
+          test -s toolchains/out/engine/engine-version.txt || { echo "::error::engine-version.txt missing"; exit 1; }
+          PINNED="$(node -p 'require("./js/engine/package.json").dependencies["@deepseek-ai/dsh"]')"
+          BUILT="$(cat toolchains/out/engine/engine-version.txt)"
+          case "$BUILT" in
+            "$PINNED"*) echo "engine $BUILT (pinned $PINNED) OK" ;;
+            *) echo "::error::engine version $BUILT does not match pinned $PINNED"; exit 1 ;;
+          esac
+
+      # ---- signing ---------------------------------------------------------
+      - name: Decode keystore
+        if: needs.gate.outputs.signed == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          test -s "$RUNNER_TEMP/release.jks"
+          echo "keystore decoded ($(stat -c %s "$RUNNER_TEMP/release.jks") bytes)"
+
+      # Written as Gradle properties, never as CLI flags: arguments are visible in `ps` and
+      # in Gradle's own logs.
+      - name: Configure signing
+        if: needs.gate.outputs.signed == 'true'
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null ~/.gradle/gradle.properties
+          {
+            echo "dsh.signing.storeFile=$RUNNER_TEMP/release.jks"
+            echo "dsh.signing.storePassword=$KEYSTORE_PASSWORD"
+            echo "dsh.signing.keyAlias=$KEY_ALIAS"
+            echo "dsh.signing.keyPassword=$KEY_PASSWORD"
+          } >> ~/.gradle/gradle.properties
+
+      # ---- build -----------------------------------------------------------
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest -Pdsh.fetchShizuku=true
+
+      - name: Assemble release APK
+        run: |
+          set -euo pipefail
+          ./gradlew :app:assembleRelease
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK" || { echo "::error::no release APK produced"; exit 1; }
+          OUT="DSH-Android-v${{ needs.gate.outputs.version }}-arm64.apk"
+          cp "$APK" "$OUT"
+          echo "APK=$OUT" >> "$GITHUB_ENV"
+          ls -l "$OUT"
+
+      - name: Verify the APK signature
+        run: |
+          set -euo pipefail
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          "$BT/apksigner" verify --print-certs "$APK" | tee /tmp/certs.txt
+          grep -q "certificate SHA-256 digest" /tmp/certs.txt || { echo "::error::APK has no signer"; exit 1; }
+          if grep -q "CN=Android Debug" /tmp/certs.txt; then
+            echo "::error::APK is debug-signed; the updater would reject it"
+            exit 1
+          fi
+
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          NOTES="docs/release-notes/v${{ needs.gate.outputs.version }}.md"
+          if [ -f "$NOTES" ]; then
+            cp "$NOTES" notes-zh.md
+          else
+            {
+              printf '## DSH-Android v%s\n\n' "${{ needs.gate.outputs.version }}"
+              printf '免提语音：离线唤醒词（默认 “Hey DSH”）与朗读回复。详情见 `docs/VOICE-WAKE.md`。\n\n'
+              printf 'Hands-free voice: offline wake word (default “Hey DSH”) and spoken replies. See `docs/VOICE-WAKE.md`.\n'
+            } > notes-zh.md
+          fi
+          cp notes-zh.md notes-en.md
+          cat notes-zh.md
+
+      # The repo's own tool, not a reimplementation. --repo matters: its default points at
+      # upstream jackwener/DSH-Android, which would send every updater to the wrong assets.
+      - name: Generate update.json
+        run: |
+          set -euo pipefail
+          python3 tools/make-update-manifest.py "$APK" \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "v${{ needs.gate.outputs.version }}" \
+            --notes-zh notes-zh.md --notes-en notes-en.md \
+            -o update.json
+          python3 - "$GITHUB_REPOSITORY" "v${{ needs.gate.outputs.version }}" <<'PY'
+          import json, sys
+          repo, tag = sys.argv[1], sys.argv[2]
+          d = json.load(open("update.json"))
+          urls = d["apk"]["urls"]
+          want = f"https://github.com/{repo}/releases/download/{tag}/"
+          if not urls or not urls[0].startswith(want):
+              sys.exit(f"update.json url {urls[0] if urls else None!r} does not start with {want!r}")
+          print("versionCode:", d["versionCode"])
+          print("signer:", d["signerSha256"])
+          print("url:", urls[0])
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-android-v${{ needs.gate.outputs.version }}
+          path: |
+            ${{ env.APK }}
+            update.json
+            notes-zh.md
+          retention-days: 14
+
+  release:
+    name: publish Release
+    needs: [gate, build]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dsh-android-v${{ needs.gate.outputs.version }}
+
+      - name: Publish the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.gate.outputs.tag }}
+          VERSION: ${{ needs.gate.outputs.version }}
+          DRAFT: ${{ inputs.draft && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          APK="DSH-Android-v${VERSION}-arm64.apk"
+          test -s "$APK" || { echo "::error::$APK missing"; exit 1; }
+          test -s update.json || { echo "::error::update.json missing"; exit 1; }
+          ARGS=()
+          [ "$DRAFT" = "true" ] && ARGS+=(--draft)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" update.json --clobber
+            gh release edit "$TAG" --title "$TAG" --notes-file notes-zh.md ${ARGS[@]+"${ARGS[@]}"}
+          else
+            gh release create "$TAG" "$APK" update.json --title "$TAG" --notes-file notes-zh.md ${ARGS[@]+"${ARGS[@]}"}
+          fi
+          echo "published $TAG"
+
+      # The repository copy may only point at a Release that already exists.
+      - name: Update update/latest.json
+        # Tag runs have no inputs.draft (empty string), which must behave like false here.
+        if: inputs.draft != true
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p update
+          cp update.json update/latest.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add update/latest.json
+          if git diff --cached --quiet; then echo "update/latest.json already current"; exit 0; fi
+          git commit -m "update/latest.json: v${VERSION}"
+          # A human push to main may land while this job runs; rebase and retry once.
+          for attempt in 1 2 3; do
+            if git push origin main; then echo "pushed"; exit 0; fi
+            echo "push attempt $attempt failed; rebasing"
+            git fetch origin main
+            git rebase origin/main || { echo "::error::conflict updating update/latest.json"; exit 1; }
+          done
+          echo "::error::could not push update/latest.json after 3 attempts"
+          exit 1
+
+      - name: Purge the jsDelivr cache
+        continue-on-error: true
+        run: |
+          curl -fsS "https://purge.jsdelivr.net/gh/${{ github.repository }}@main/update/latest.json" \
+            && echo "purged" || echo "purge failed (non-fatal)"

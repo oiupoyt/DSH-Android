@@ -147,4 +147,6 @@ dependencies {
     implementation(libs.pdfbox.android) { exclude(group = "org.bouncycastle") }
     // Offline text recognition (Chinese + Latin, bundled model) for custom-drawn screens without readable nodes.
     implementation(libs.mlkit.text.chinese)
+    // On-device keyword spotting for 免提语音 (wake word). Vendored AAR, arm64-v8a only.
+    implementation(files("libs/sherpa-onnx-2.0.1-arm64.aar"))
 }

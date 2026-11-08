@@ -187,6 +187,20 @@ class SettingsViewModel @Inject constructor(
     val permissionTick = MutableStateFlow(0)
     fun setBall(on: Boolean) = viewModelScope.launch { repo.setFloatingBall(on); FloatingBallService.setEnabled(context, on) }
     fun setBallStatus(on: Boolean) = viewModelScope.launch { repo.setBallStatus(on) }
+
+    // ── 免提语音 (Voice) ──
+    /**
+     * Applies one Voice change: persists the whole blob in a single write, then starts or stops
+     * the services so the switch takes effect immediately rather than on the next launch.
+     */
+    fun updateVoice(transform: (io.github.jackwener.dsh.wake.VoiceSettings) -> io.github.jackwener.dsh.wake.VoiceSettings) =
+        viewModelScope.launch {
+            val next = transform(io.github.jackwener.dsh.wake.VoiceSettings.from(repo.current().voice)).clamped()
+            repo.setVoice(next.toStored())
+            // The master switch gates both: off releases the mic and the TTS engine right away.
+            io.github.jackwener.dsh.wake.WakeWordService.setEnabled(context, next.shouldRunWakeService)
+            io.github.jackwener.dsh.wake.TalkbackService.setEnabled(context, next.shouldSpeak)
+        }
     fun setLimits(daily: Long, session: Long) = viewModelScope.launch { repo.setLimits(daily, session) }
     fun toggleNotificationApp(pkg: String) = viewModelScope.launch {
         val cur = settings.value.notificationBlocked

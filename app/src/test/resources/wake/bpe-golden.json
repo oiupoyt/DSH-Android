@@ -1,0 +1,242 @@
+{
+ "model": "sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/bpe.model",
+ "generator": "sentencepiece 0.2.x SentencePieceProcessor.encode(out_type=str)",
+ "cases": [
+  {
+   "phrase": "HEY DSH",
+   "pieces": [
+    "▁HE",
+    "Y",
+    "▁",
+    "D",
+    "SH"
+   ]
+  },
+  {
+   "phrase": "HEY DASH",
+   "pieces": [
+    "▁HE",
+    "Y",
+    "▁DA",
+    "SH"
+   ]
+  },
+  {
+   "phrase": "HELLO",
+   "pieces": [
+    "▁HE",
+    "LL",
+    "O"
+   ]
+  },
+  {
+   "phrase": "OKAY GOOGLE",
+   "pieces": [
+    "▁OKAY",
+    "▁GO",
+    "O",
+    "G",
+    "LE"
+   ]
+  },
+  {
+   "phrase": "LIGHT UP",
+   "pieces": [
+    "▁",
+    "L",
+    "IGHT",
+    "▁UP"
+   ]
+  },
+  {
+   "phrase": "OPEN THE APP",
+   "pieces": [
+    "▁O",
+    "P",
+    "EN",
+    "▁THE",
+    "▁APP"
+   ]
+  },
+  {
+   "phrase": "HEY COMPUTER",
+   "pieces": [
+    "▁HE",
+    "Y",
+    "▁COMP",
+    "U",
+    "TER"
+   ]
+  },
+  {
+   "phrase": "START A NEW CHAT",
+   "pieces": [
+    "▁START",
+    "▁A",
+    "▁NEW",
+    "▁CHA",
+    "T"
+   ]
+  },
+  {
+   "phrase": "THE YELLOW LAMPS",
+   "pieces": [
+    "▁THE",
+    "▁",
+    "Y",
+    "E",
+    "LL",
+    "OW",
+    "▁LA",
+    "M",
+    "P",
+    "S"
+   ]
+  },
+  {
+   "phrase": "CONSEQUENCE",
+   "pieces": [
+    "▁CON",
+    "SE",
+    "QU",
+    "ENCE"
+   ]
+  },
+  {
+   "phrase": "MERRY CHRISTMAS",
+   "pieces": [
+    "▁ME",
+    "R",
+    "RY",
+    "▁",
+    "CH",
+    "R",
+    "IST",
+    "MA",
+    "S"
+   ]
+  },
+  {
+   "phrase": "PLAY MUSIC",
+   "pieces": [
+    "▁PLAY",
+    "▁MU",
+    "S",
+    "IC"
+   ]
+  },
+  {
+   "phrase": "GO HOME",
+   "pieces": [
+    "▁GO",
+    "▁HOME"
+   ]
+  },
+  {
+   "phrase": "HI DSH",
+   "pieces": [
+    "▁HI",
+    "▁",
+    "D",
+    "SH"
+   ]
+  },
+  {
+   "phrase": "HEY D S H",
+   "pieces": [
+    "▁HE",
+    "Y",
+    "▁",
+    "D",
+    "▁S",
+    "▁",
+    "H"
+   ]
+  },
+  {
+   "phrase": "TURN ON THE LIGHT",
+   "pieces": [
+    "▁TURN",
+    "▁ON",
+    "▁THE",
+    "▁",
+    "L",
+    "IGHT"
+   ]
+  },
+  {
+   "phrase": "A",
+   "pieces": [
+    "▁A"
+   ]
+  },
+  {
+   "phrase": "HEY",
+   "pieces": [
+    "▁HE",
+    "Y"
+   ]
+  },
+  {
+   "phrase": "DSH",
+   "pieces": [
+    "▁",
+    "D",
+    "SH"
+   ]
+  },
+  {
+   "phrase": "OPEN SETTINGS",
+   "pieces": [
+    "▁O",
+    "P",
+    "EN",
+    "▁SE",
+    "T",
+    "T",
+    "ING",
+    "S"
+   ]
+  },
+  {
+   "phrase": "WHAT TIME IS IT",
+   "pieces": [
+    "▁WHAT",
+    "▁TIME",
+    "▁IS",
+    "▁IT"
+   ]
+  },
+  {
+   "phrase": "HEY JARVIS",
+   "pieces": [
+    "▁HE",
+    "Y",
+    "▁JA",
+    "R",
+    "VI",
+    "S"
+   ]
+  },
+  {
+   "phrase": "OK DSH",
+   "pieces": [
+    "▁O",
+    "K",
+    "▁",
+    "D",
+    "SH"
+   ]
+  },
+  {
+   "phrase": "HEY DS",
+   "pieces": [
+    "▁HE",
+    "Y",
+    "▁",
+    "D",
+    "S"
+   ]
+  }
+ ]
+}

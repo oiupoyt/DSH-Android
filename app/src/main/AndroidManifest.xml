@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 免提语音: the always-listening wake-word service records audio in the foreground. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -218,6 +220,23 @@
             android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Shows the user-enabled floating button that opens the assistant." />
+        </service>
+
+        <!-- 免提语音 唤醒词: foreground service holding the microphone, feeding sherpa-onnx KWS.
+             foregroundServiceType is mandatory from API 34; the recorder is released before the
+             activity it launches opens its own, so only one recorder ever holds the mic. -->
+        <service
+            android:name=".wake.WakeWordService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- 免提语音 朗读回复: on-device TextToSpeech, started while a spoken reply is being read. -->
+        <service
+            android:name=".wake.TalkbackService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Reads the assistant's replies aloud with the on-device text-to-speech engine while 免提语音 is on." />
         </service>
 
         <service

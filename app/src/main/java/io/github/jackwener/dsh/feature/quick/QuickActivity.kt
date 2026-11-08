@@ -211,8 +211,17 @@ class QuickActivity : ComponentActivity() {
 
     private fun handleIntent(i: Intent, freshPanel: Boolean, reopened: Boolean) {
         // The floating ball / capsule during a run started here: exactly that conversation (#39).
-        i.getStringExtra(EXTRA_SESSION)?.let { id -> if (id != vm.id) vm.open(id); return }
-        if (i.getBooleanExtra(EXTRA_VOICE, false)) listenRequest++
+        i.getStringExtra(EXTRA_SESSION)?.let { id ->
+            // The conversation this panel now shows is where a spoken reply belongs, even when it
+            // is already open (vm.open covers the switch case, this covers the same-session case).
+            if (id != vm.id) vm.open(id) else io.github.jackwener.dsh.wake.TalkbackService.setActiveSession(id)
+            return
+        }
+        if (i.getBooleanExtra(EXTRA_WAKE, false)) {
+            // Wake capture: same "start listening" request as the ball, plus the spoken-reply target.
+            listenRequest++
+            lifecycleScope.launch { io.github.jackwener.dsh.wake.TalkbackService.setActiveSession(vm.id) }
+        } else if (i.getBooleanExtra(EXTRA_VOICE, false)) listenRequest++
         else if (i.getBooleanExtra(EXTRA_FROM_ASSIST, false)) lifecycleScope.launch { if (settingsRepo.current().voiceOnAssist) listenRequest++ }
         if (i.getBooleanExtra(EXTRA_SCREEN, false)) return attachScreen(reopened)
         if (i.action == ACTION_RUN_TASK) {
@@ -268,6 +277,12 @@ class QuickActivity : ComponentActivity() {
         const val EXTRA_SCREEN = "screen"
         /** Open listening (floating ball long-press). */
         const val EXTRA_VOICE = "voice"
+        /**
+         * 免提语音 唤醒词: the wake-word service saw the phrase. The panel starts capture as soon as
+         * the engine is ready instead of waiting for a tap; a cold engine keeps the same loading
+         * surface the panel already shows.
+         */
+        const val EXTRA_WAKE = "wake"
         const val ACTION_RUN_TASK = "io.github.jackwener.dsh.RUN_TASK"
         const val EXTRA_TASK = "task"
         /** Open this panel conversation (the floating ball while a run started here goes on). */
