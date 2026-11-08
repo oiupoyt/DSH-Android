@@ -272,6 +272,7 @@ jobs:
       # to produce one. Publishing it is not: the publisher re-checks and refuses. The flag is
       # passed through a file because the artifact upload and the release job are separate.
       - name: Verify the APK signature
+        id: sig
         run: |
           set -euo pipefail
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
@@ -279,9 +280,11 @@ jobs:
           grep -q "certificate SHA-256 digest" /tmp/certs.txt || { echo "::error::APK has no signer"; exit 1; }
           if grep -q "CN=Android Debug" /tmp/certs.txt; then
             echo "debug-signed" > signing.txt
+            echo "release=false" >> "$GITHUB_OUTPUT"
             echo "::warning::APK is debug-signed: artifacts are fine to inspect, but this build must not be published."
           else
             echo "release-signed" > signing.txt
+            echo "release=true" >> "$GITHUB_OUTPUT"
           fi
           cat signing.txt
 
@@ -303,7 +306,12 @@ jobs:
 
       # The repo's own tool, not a reimplementation. --repo matters: its default points at
       # upstream jackwener/DSH-Android, which would send every updater to the wrong assets.
+      #
+      # Only for a release-signed APK: make-update-manifest.py demands v1+v2+v3, and a
+      # debug-signed build has no v1 (minSdk 29 makes AGP skip it), so there is no valid
+      # manifest to write. An artifacts-only run deliberately gets none.
       - name: Generate update.json
+        if: steps.sig.outputs.release == 'true'
         run: |
           set -euo pipefail
           python3 tools/make-update-manifest.py "$APK" \
@@ -330,9 +338,16 @@ jobs:
           name: dsh-android-v${{ needs.gate.outputs.version }}
           path: |
             ${{ env.APK }}
-            update.json
             notes-zh.md
             signing.txt
+          retention-days: 14
+
+      - name: Upload updater manifest
+        if: steps.sig.outputs.release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-android-v${{ needs.gate.outputs.version }}-manifest
+          path: update.json
           retention-days: 14
 
   release:
@@ -348,6 +363,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: dsh-android-v${{ needs.gate.outputs.version }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dsh-android-v${{ needs.gate.outputs.version }}-manifest
 
       - name: Publish the Release
         env:
