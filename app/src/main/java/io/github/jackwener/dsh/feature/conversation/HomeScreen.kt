@@ -199,10 +199,14 @@ fun ComposerSlot(vm: ConversationController, composer: ComposerState, settings: 
         composer.clear()
         vm.send(text, images, now = settings.busySend == io.github.jackwener.dsh.core.data.BusySend.Steer)
     }
-    val voice = io.github.jackwener.dsh.feature.voice.rememberVoiceInput(composer) {
-        // Attachments still loading: leave the spoken text in the draft for a manual send.
-        if (composer.pending == 0 && !composer.isEmpty) send()
-    }
+    val voice = io.github.jackwener.dsh.feature.voice.rememberVoiceInput(
+        composer = composer,
+        onSend = {
+            // Attachments still loading: leave the spoken text in the draft for a manual send.
+            if (composer.pending == 0 && !composer.isEmpty) send()
+        },
+        offlineDictation = io.github.jackwener.dsh.wake.VoiceSettings.from(settings.voice).offlineDictation,
+    )
     val cardShown = live.takeover != null || live.permission != null || live.approval != null || live.question != null
     // A summon can land just before the panel switches to its recent session (a new composer, so a new
     // VoiceInput): a request taken in the last moment is replayed on the new one.

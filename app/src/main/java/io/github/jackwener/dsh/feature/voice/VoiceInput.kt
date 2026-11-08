@@ -57,6 +57,8 @@ class VoiceInput internal constructor(private val context: Context, private val 
     internal var launchActivity: (Intent) -> Boolean = { false }
 
     private var recognizer: SpeechRecognizer? = null
+    /** The bundled-model capture, when 离线听写 drove this turn. */
+    private var offline: io.github.jackwener.dsh.wake.OfflineDictation? = null
     private var onDevice = false
     private var draft = ""
     private var timer: Job? = null
@@ -66,6 +68,9 @@ class VoiceInput internal constructor(private val context: Context, private val 
     fun start() {
         cancel()
         draft = composer.text
+        // 离线听写: the bundled model instead of the system recogniser, so this works in airplane
+        // mode. It drives the same VoiceMachine states, so the composer UI is unchanged.
+        if (offlineDictation()) { startOffline(); return }
         val service = serviceRecognizer()
         val canOnDevice = Build.VERSION.SDK_INT >= 31 && runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
         if (!canOnDevice && service == null) {
@@ -80,13 +85,17 @@ class VoiceInput internal constructor(private val context: Context, private val 
 
     /** Stops taking audio: the recognizer then delivers the final result (nothing heard yet: just cancels). */
     fun stop() {
+        offline?.let { dictation -> if (dictation.isCapturing) { dictation.stop(); return } }
         val s = state as? VoiceState.Listening ?: return
         val r = recognizer
         if (r != null && s.text.isNotEmpty()) r.stopListening() else cancel()
     }
 
     /** Keeps whatever is in the composer and sends nothing. */
-    fun cancel() { if (state != VoiceState.Idle) dispatch(VoiceEvent.Cancel) }
+    fun cancel() {
+        offline?.let { if (it.isCapturing) it.cancel() }
+        if (state != VoiceState.Idle) dispatch(VoiceEvent.Cancel)
+    }
 
     /** The user typed in the composer while we were writing to it. */
     fun onUserEdit() = cancel()
@@ -101,7 +110,12 @@ class VoiceInput internal constructor(private val context: Context, private val 
         if (resultCode == Activity.RESULT_OK && text.isNotBlank()) { dispatch(VoiceEvent.Start); dispatch(VoiceEvent.Final(text)) } else cancel()
     }
 
-    internal fun release() { cancel(); destroyRecognizer() }
+    internal fun release() {
+        cancel()
+        offline?.release()
+        offline = null
+        destroyRecognizer()
+    }
 
     private fun listen(onDevice: Boolean, service: ComponentName?) {
         destroyRecognizer()
@@ -135,6 +149,34 @@ class VoiceInput internal constructor(private val context: Context, private val 
     }
 
     private fun best(b: Bundle?) = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+
+    /**
+     * Whether the bundled model should transcribe. Kept current by the caller from live settings,
+     * so toggling 离线听写 takes effect on the next tap rather than after a restart.
+     */
+    internal var offlineDictation: () -> Boolean = { false }
+
+    /** Capture through [OfflineDictation]; partials and the final transcript feed the same machine. */
+    private fun startOffline() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermission()
+            return
+        }
+        dispatch(VoiceEvent.Start)
+        dispatch(VoiceEvent.Ready)
+        offline?.release()
+        val dictation = io.github.jackwener.dsh.wake.OfflineDictation(context)
+        offline = dictation
+        dictation.start(
+            onPartial = { text -> if (text.isNotEmpty()) dispatch(VoiceEvent.Partial(text)) },
+            onFinal = { text -> if (text.isNotBlank()) dispatch(VoiceEvent.Final(text)) else cancel() },
+            onError = { message ->
+                // Typed failure is shown, never a silent no-op; the composer keeps whatever was said.
+                dispatch(VoiceEvent.Error(VoiceError.Other))
+                android.util.Log.w("VoiceInput", "offline dictation: $message")
+            },
+        )
+    }
 
     private fun dispatch(e: VoiceEvent) {
         val effect = machine.on(e)
@@ -201,11 +243,13 @@ class VoiceInput internal constructor(private val context: Context, private val 
 
 /** A [VoiceInput] writing into [composer]; [onSend] sends the composer as the Send button would. */
 @Composable
-fun rememberVoiceInput(composer: ComposerState, onSend: () -> Unit): VoiceInput {
+fun rememberVoiceInput(composer: ComposerState, onSend: () -> Unit, offlineDictation: Boolean = false): VoiceInput {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val voice = remember(composer) { VoiceInput(context, composer, scope) }
     val send by rememberUpdatedState(onSend)
+    val offline by rememberUpdatedState(offlineDictation)
+    voice.offlineDictation = { offline }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { voice.onPermission(it) }
     val activity = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { voice.onActivityResult(it.resultCode, it.data) }
     voice.onSend = { send() }

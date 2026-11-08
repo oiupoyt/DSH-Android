@@ -72,6 +72,11 @@ data class Settings(
     val allowExternalApps: Boolean = false,
     /** 唤起助手时直接语音输入: the assistant gesture opens the quick panel already listening. */
     val voiceOnAssist: Boolean = true,
+    /**
+     * 免提语音 (Voice): wake word + spoken replies. Stored as a flat string map in the same
+     * preferences blob as [floatingBall] / [theme]; see [io.github.jackwener.dsh.wake.VoiceSettings].
+     */
+    val voice: Map<String, String> = emptyMap(),
     /** 在后台屏操作 App: with Shizuku, apps the agent opens run on its own virtual screen (AgentScreen). */
     val agentScreen: Boolean = true,
     /** 任务结束后自动总结经验: after a turn that worked in an app, one short model call distills App 经验 notes. */
@@ -122,6 +127,7 @@ private val modeList = ListSerializer(SessionMode.serializer())
 private val mcpList = ListSerializer(McpServer.serializer())
 private val choiceMap = MapSerializer(String.serializer(), String.serializer())
 private val catalogMap = MapSerializer(String.serializer(), ModelReasoning.serializer())
+private val voiceBlobMap = MapSerializer(String.serializer(), String.serializer())
 
 @Singleton
 class SettingsRepository @Inject constructor(@ApplicationContext private val context: Context) {
@@ -145,6 +151,7 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
         val agentScreen = booleanPreferencesKey("agent_screen")
         val reflect = booleanPreferencesKey("reflect_experience")
         val voiceOnAssist = booleanPreferencesKey("voice_on_assist")
+        val voiceBlob = stringPreferencesKey("voice_json")
         val pluginRegistry = stringPreferencesKey("plugin_registry_mode")
         val pluginRegistryCustom = stringPreferencesKey("plugin_registry_custom")
         val mcpServers = stringPreferencesKey("mcp_servers_json")
@@ -182,6 +189,7 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
         agentScreen = this[K.agentScreen] ?: true,
         reflectExperience = this[K.reflect] ?: true,
         voiceOnAssist = this[K.voiceOnAssist] ?: true,
+        voice = decodeVoice(this[K.voiceBlob]),
         pluginRegistry = RegistryMode.of(this[K.pluginRegistry]),
         pluginRegistryCustom = this[K.pluginRegistryCustom] ?: "",
         mcpServers = decodeMcp(this[K.mcpServers]),
@@ -247,6 +255,11 @@ class SettingsRepository @Inject constructor(@ApplicationContext private val con
     suspend fun setAgentScreen(on: Boolean) = context.store.edit { it[K.agentScreen] = on }
     suspend fun setReflectExperience(on: Boolean) = context.store.edit { it[K.reflect] = on }
     suspend fun setVoiceOnAssist(on: Boolean) = context.store.edit { it[K.voiceOnAssist] = on }
+
+    /** 免提语音: replaces the stored blob (the Voice section's whole state, one write). */
+    suspend fun setVoice(values: Map<String, String>) = context.store.edit {
+        it[K.voiceBlob] = json.encodeToString(voiceBlobMap, values)
+    }
     suspend fun setAutoUpdateCheck(on: Boolean) = context.store.edit { it[K.autoUpdateCheck] = on }
     suspend fun setEngineKeepAlive(on: Boolean) = context.store.edit { it[K.engineKeepAlive] = on }
     suspend fun setPluginBackgroundSeen() = context.store.edit { it[K.pluginBackgroundSeen] = true }
@@ -278,6 +291,12 @@ internal fun withChoice(choices: Map<String, String>, provider: String, model: S
     val k = ReasoningLevels.key(provider, model)
     return if (level == null) choices - k else choices + (k to level)
 }
+
+/** The Voice blob; an unreadable value (a future format) reads as defaults, never as an error. */
+internal fun decodeVoice(raw: String?): Map<String, String> =
+    raw?.let { runCatching { json.decodeFromString(voiceBlobMap, it) }.getOrNull() } ?: emptyMap()
+
+internal fun encodeVoice(values: Map<String, String>): String = json.encodeToString(voiceBlobMap, values)
 
 internal fun decodeMcp(raw: String?): List<McpServer> =
     raw?.let { runCatching { json.decodeFromString(mcpList, it) }.getOrNull() } ?: emptyList()

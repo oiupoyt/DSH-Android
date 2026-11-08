@@ -55,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.jackwener.dsh.BuildConfig
 import io.github.jackwener.dsh.R
 import io.github.jackwener.dsh.core.session.cacheHitRate
+import io.github.jackwener.dsh.wake.VoiceSettings
 import io.github.jackwener.dsh.core.data.BusySend
 import io.github.jackwener.dsh.core.data.Effort
 import io.github.jackwener.dsh.core.data.ThemeMode
@@ -445,6 +446,9 @@ private fun PhoneSection(vm: SettingsViewModel, onNotificationApps: () -> Unit) 
         }
     }
     Text(stringResource(R.string.restricted_hint), Modifier.padding(start = 4.dp, top = 8.dp), style = DshType.xxs12, color = c.labelTertiary)
+    // 免提语音: wake word + spoken replies, in one section on this page (no separate screen).
+    val voiceSettings = VoiceSettings.from(vm.settings.collectAsStateWithLifecycle().value.voice)
+    io.github.jackwener.dsh.wake.VoiceSettingsSection(voiceSettings) { transform -> vm.updateVoice(transform) }
     SettingsGroupTitle(stringResource(R.string.set_more))
     SettingsCard {
         SettingsRow(stringResource(R.string.notification_apps), stringResource(R.string.notification_apps_desc), divider = false, onClick = onNotificationApps,

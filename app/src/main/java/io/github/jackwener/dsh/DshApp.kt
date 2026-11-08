@@ -42,6 +42,13 @@ class DshApp : Application() {
             runCatching { io.github.jackwener.dsh.core.engine.EngineDiagnostics.collectExitInfo(this@DshApp) }
             runCatching { triggers.get().sync() }.onFailure { android.util.Log.e("DshApp", "automation sync failed", it) }
             if (settings.get().current().floatingBall) runCatching { FloatingBallService.setEnabled(this@DshApp, true) }
+            // 免提语音: on Android 14+ a microphone foreground service cannot be started from
+            // BOOT_COMPLETED, so a reboot with the toggle on resumes when the app is next opened
+            // instead of at boot. Starting it here keeps the feature on without a hidden service.
+            runCatching {
+                val voice = io.github.jackwener.dsh.wake.VoiceSettings.from(settings.get().current().voice)
+                io.github.jackwener.dsh.wake.WakeWordService.setEnabled(this@DshApp, voice.shouldRunWakeService)
+            }.onFailure { android.util.Log.e("DshApp", "wake restore failed", it) }
             runCatching { agentScreen.get().restoreLeftoverMutes() }
             // 引擎常驻 (#52): every start of :main, including the one boot / an app update / a re-created engine service causes.
             runCatching { engine.get().keepAlive() }

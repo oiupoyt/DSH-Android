@@ -29,6 +29,7 @@ import io.github.jackwener.dsh.core.session.SessionStore
 import io.github.jackwener.dsh.core.session.TakeoverAnswer
 import io.github.jackwener.dsh.core.session.Trajectory
 import io.github.jackwener.dsh.core.session.TurnError
+import io.github.jackwener.dsh.wake.TalkbackService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -118,12 +119,17 @@ open class ConversationController(
         sessionId.value = id
         view.value = SessionView.Chat
         store.setViewing(this, id)
+        // 免提语音: replies are spoken for the conversation the user is actually looking at, so a
+        // typed prompt in the app speaks too (not only one started by the wake word). Never
+        // cleared here: a reply still being read must not be cut off when a screen closes.
+        TalkbackService.setActiveSession(id)
     }
 
     open fun newSession() {
         sessionId.value = store.newSessionId()
         view.value = SessionView.Chat
         store.setViewing(this, sessionId.value)
+        TalkbackService.setActiveSession(sessionId.value)
     }
 
     /** The session's preset is the store's own; [live] can still be the previous session's right after open/newSession. */

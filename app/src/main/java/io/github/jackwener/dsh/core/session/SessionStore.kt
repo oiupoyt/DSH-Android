@@ -660,7 +660,12 @@ class SessionStore @Inject constructor(
                 val time = event.l("time") ?: System.currentTimeMillis()
                 if (type in UNLOGGED) return
                 val op = event["surfaceOp"]
-                val data = slim(type, event.o("data") ?: JsonObject(emptyMap())).let { d ->
+                val raw = event.o("data") ?: JsonObject(emptyMap())
+                // 免提语音 朗读回复: the spoken-reply layer needs the live text deltas, which
+                // slim() below strips before the event is stored. Hand it the raw payload first.
+                runCatching { io.github.jackwener.dsh.wake.TalkbackService.onEngineEvent(sessionId, type, raw) }
+                if (type == "user/message") runCatching { io.github.jackwener.dsh.wake.TalkbackService.onUserMessage(sessionId) }
+                val data = slim(type, raw).let { d ->
                     // Keep a non-append surfaceOp (the pruner's `replace` of an old tool result): it is not a new result.
                     if (op == null || (op is JsonPrimitive && op.contentOrNull == "append")) d else JsonObject(d + (SURFACE_OP_KEY to op))
                 }

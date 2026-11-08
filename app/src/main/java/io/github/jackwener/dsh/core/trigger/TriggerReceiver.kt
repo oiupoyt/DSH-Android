@@ -61,13 +61,21 @@ class TriggerReceiver : BroadcastReceiver() {
 class BootReceiver : BroadcastReceiver() {
     @Inject lateinit var hub: TriggerHub
     @Inject lateinit var engine: dagger.Lazy<EngineManager>
+    @Inject lateinit var settings: dagger.Lazy<io.github.jackwener.dsh.core.data.SettingsRepository>
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == EngineKeepAlive.ACTION_RESTORE) { engine.get().keepAlive(restored = true); return }
         if (intent.action !in ACTIONS) return
         val pending = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
-            try { runCatching { hub.sync() }.onFailure { android.util.Log.e("BootReceiver", "sync failed", it) } } finally { pending.finish() }
+            runCatching { hub.sync() }.onFailure { android.util.Log.e("BootReceiver", "sync failed", it) }
+            // 免提语音: restore the wake-word service only if the user left it on. Off stays off
+            // (nothing here can start listening that the user did not ask for).
+            try {
+                val voice = io.github.jackwener.dsh.wake.VoiceSettings.from(settings.get().current().voice)
+                io.github.jackwener.dsh.wake.WakeWordService.setEnabled(context, voice.shouldRunWakeService)
+            } catch (e: Exception) { android.util.Log.e("BootReceiver", "wake restore failed", e) }
+            finally { pending.finish() }
         }
     }
 
