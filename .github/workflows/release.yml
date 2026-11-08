@@ -396,7 +396,13 @@ jobs:
       # The repository copy may only point at a Release that already exists.
       - name: Update update/latest.json
         # Tag runs have no inputs.draft (empty string), which must behave like false here.
-        if: inputs.draft != true
+        #
+        # The repository manifest is what every installed app polls (UpdateManifest REPO is
+        # hardcoded to upstream, and any fork build points at its own). Committing it is
+        # therefore an explicit decision, not a side effect of publishing: a Release signed
+        # with a test key must never redirect existing installs. Set the repository variable
+        # COMMIT_UPDATE_MANIFEST=true once the signing key is the one real users should get.
+        if: inputs.draft != true && vars.COMMIT_UPDATE_MANIFEST == 'true'
         env:
           VERSION: ${{ needs.gate.outputs.version }}
         run: |

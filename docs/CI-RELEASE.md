@@ -53,6 +53,16 @@ could change underneath a build.
 Step 2's manifest step runs only for a release-signed APK: the generator enforces v1+v2+v3
 signatures, and a debug build has no v1 because `minSdk 29` makes AGP skip it.
 
+## Repository variables
+
+| Variable | Effect |
+|---|---|
+| `COMMIT_UPDATE_MANIFEST=true` | lets a publish run commit `update/latest.json`. Left unset, the Release still gets its own `update.json` asset, but the manifest every installed app polls is left alone. |
+
+Keep it unset while releases are signed with a test key: committing a manifest whose
+`signerSha256` is not the shipped app's would point existing installs at an update they cannot
+install.
+
 ## Notes
 
 - `android-actions/setup-android` is not used: it shells out to `sdkmanager tools`, a package
